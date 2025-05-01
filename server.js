@@ -88,18 +88,19 @@ app.put("/usuarios/:id", verifyToken, async (req, res) => {
 
 // Listar usuários (Admin vê todos, usuário normal vê apenas os seus)
 app.get("/usuarios", verifyToken, async (req, res) => {
-  try {
-    if (req.user.role === "admin") {
-      const users = await prisma.user.findMany();
-      return res.status(200).json(users);
-    }
+  const { id, role } = req.user;
 
-    const users = await prisma.user.findMany({ where: { createdBy: req.user.id } });
+  try {
+    const users = role === "admin"
+      ? await prisma.user.findMany()
+      : await prisma.user.findMany({ where: { createdBy: id } });
+
     res.status(200).json(users);
   } catch (error) {
     res.status(500).json({ error: "Erro ao buscar usuários." });
   }
 });
+
 
 // Deletar usuário (Criador pode deletar seus próprios usuários, admin pode deletar qualquer um)
 app.delete("/usuarios/:id", verifyToken, async (req, res) => {
