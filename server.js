@@ -1,64 +1,132 @@
-import express from 'express';
-import cors from 'cors';
-import { PrismaClient } from '@prisma/client'
+import express from "express";
+import cors from "cors";
+import { PrismaClient } from "@prisma/client";
+import dotenv from "dotenv";
+import { verifyToken } from "./middlewares/auth.js";
+import authRouter from "./routes/auth.js";
+import errorHandler from "./middlewares/errorHandler.js";
+import bcrypt from 'bcryptjs';
 
-const prisma = new PrismaClient()
-const app =  express()
+dotenv.config();
+
+
+
+const prisma = new PrismaClient();
+const app = express();
 app.use(express.json());
-app.use(cors())
+app.use(cors());
+//midleware global para tratamento de erros
+app.use(errorHandler)
 
+app.use("/auth", authRouter);
 
-app.post('/usuarios', async (req, res)  => {
-    
-     await prisma.user.create({
-        data: {
-           email: req.body.email,
-           name: req.body.name,
-           age: req.body.age
-        },
-    })
+// Criar usuário (Apenas usuário autenticado)
+app.post("/usuarios", verifyToken, async (req, res) => {
+  const { email, username, name, age, password } = req.body;
+  const creatorId = req.user.id;
 
-    res.status(201).json(req.body)
-})
+  try {
+    // Validação básica
+    if (!email || !username || !name || !age || !password) {
+      return res.status(400).json({ error: "Todos os campos são obrigatórios." });
+    }
 
-app.put('/usuarios/:id', async (req, res)  => {
-    
-     await prisma.user.update({
-         where: {
-           id: req.params.id,
-         },
-        data: {
-           email: req.body.email,
-           name: req.body.name,
-           age: req.body.age
-        },
-    })
+    // Verifica se email já existe
+    const existingUser = await prisma.user.findUnique({
+      where: { email },
+    });
 
-   res.status(201).json(req.body)
-})
-app.get('/usuarios', async (req, res)  => {
-    
-    const users = await prisma.user.findMany()
+    if (existingUser) {
+      return res.status(400).json({ error: "E-mail já está em uso." });
+    }
 
-    res.status(200).json(users)
-})
+    // Criptografa a senha
+    const hashedPassword = await bcrypt.hash(password, 10);
 
-app.delete('/usuarios/:id', async (req, res) => {
-    await prisma.user.delete({
-        where: {
-          id: req.params.id,
-        },
-    })
+    // Criação do usuário
+    const newUser = await prisma.user.create({
+      data: {
+        email,
+        username,
+        name,
+        age,
+        password: hashedPassword,
+        createdBy: creatorId,
+      },
+    });
 
-    res.status(200).json({ message: "Usuario deletado com sucesso!" })
-})
+    res.status(201).json(newUser);
 
-const PORT = process.env.PORT
+  } catch (error) {
+    console.error("Erro ao criar usuário:", error); // <--- Mostra o erro no terminal
+    res.status(500).json({ error: "Erro interno ao criar usuário." });
+  }
+});
 
-app.listen(3000, () => {
-    console.log('Servidor rodando na porta ' + PORT)
-})
+// Editar usuário (Apenas o criador pode editar)
+app.put("/usuarios/:id", verifyToken, async (req, res) => {
+  const { id } = req.params;
+  const { email, name, age } = req.body;
 
+  try {
+    const user = await prisma.user.findUnique({ where: { id } });
+
+    if (!user || user.createdBy !== req.user.id) {
+      return res.status(403).json({ error: "Você só pode editar usuários que criou." });
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id },
+      data: { email, name, age },
+    });
+
+    res.status(200).json(updatedUser);
+  } catch (error) {
+    res.status(400).json({ error: "Erro ao editar usuário." });
+  }
+});
+
+// Listar usuários (Admin vê todos, usuário normal vê apenas os seus)
+app.get("/usuarios", verifyToken, async (req, res) => {
+  try {
+    if (req.user.role === "admin") {
+      const users = await prisma.user.findMany();
+      return res.status(200).json(users);
+    }
+
+    const users = await prisma.user.findMany({ where: { createdBy: req.user.id } });
+    res.status(200).json(users);
+  } catch (error) {
+    res.status(500).json({ error: "Erro ao buscar usuários." });
+  }
+});
+
+// Deletar usuário (Criador pode deletar seus próprios usuários, admin pode deletar qualquer um)
+app.delete("/usuarios/:id", verifyToken, async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const userToDelete = await prisma.user.findUnique({ where: { id } });
+
+    if (!userToDelete) {
+      return res.status(404).json({ error: "Usuário não encontrado." });
+    }
+
+    if (req.user.role !== "admin" && userToDelete.createdBy !== req.user.id) {
+      return res.status(403).json({ error: "Você não tem permissão para deletar este usuário." });
+    }
+
+    await prisma.user.delete({ where: { id } });
+    res.json({ message: "Usuário deletado com sucesso!" });
+  } catch (error) {
+    res.status(500).json({ error: "Erro ao deletar usuário." });
+  }
+});
+
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => {
+  console.log("Servidor rodando na porta " + PORT);
+});
 
 /*
     1) tipo de rota /Método HTTP
@@ -73,5 +141,5 @@ app.listen(3000, () => {
     -deletar um usuário
 
     victorpedrosilva445
-    vaaCke7cFPsdaKm9
+    K1tun94UgPItOiB3
 */
